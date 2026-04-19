@@ -138,27 +138,28 @@ let
   # An important caveat is that the message could theoretically be truncated but this should not
   # happen in practice unless the message is large (systemd notifications are small).
   #
-  # TODO(rzhikharevich): Ideally, cloud-hypervisor should propagate the half-close, then the
+  # TODO: Ideally, cloud-hypervisor should propagate the half-close, then the
   # theoretical truncation risk could be fixed by closing the connection after detecting it.
   vsockNotifyProxy = pkgs.writers.writePython3Bin "vsock-notify-proxy" {} ''
     import asyncio
     import os
     import socket
+    import sys
 
-    notify_socket = os.environ["NOTIFY_SOCKET"]
     notify = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    notify.connect(os.environ["NOTIFY_SOCKET"])
 
 
     async def handle(reader, writer):
         data = await reader.read(65536)
         writer.close()
         if data:
-            notify.sendto(data, notify_socket)
+            notify.send(data)
+        await writer.wait_closed()
 
 
     async def main():
-        path = os.environ["VSOCK_NOTIFY_PATH"]
-        server = await asyncio.start_unix_server(handle, path=path)
+        server = await asyncio.start_unix_server(handle, path=sys.argv[1])
         await server.serve_forever()
 
 
@@ -196,7 +197,7 @@ in {
 
     # Forward systemd notify messages from guest (via vsock) to host
     if [ -n "''${NOTIFY_SOCKET:-}" ]; then
-      VSOCK_NOTIFY_PATH=${vsockPath}_8888 ${vsockNotifyProxy}/bin/vsock-notify-proxy &
+      ${vsockNotifyProxy}/bin/vsock-notify-proxy ${vsockPath}_8888 &
     fi
   '' + lib.optionalString graphics.enable ''
     rm -f ${graphics.socket}
